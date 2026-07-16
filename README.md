@@ -27,26 +27,26 @@ RUN pip install /authentik-sso
 ```python
 from fastapi import Depends, FastAPI
 
-from authentik_sso import (
-    SSOConfig,
-    add_cors_middleware,
-    add_session_middleware,
-    create_auth_router,
-    require_user,
-)
+from authentik_sso import SSOConfig, AuthentikAuth, add_cors_middleware, add_session_middleware
 
 config = SSOConfig.from_env()
 
 app = FastAPI()
 add_session_middleware(app, config)
 add_cors_middleware(app, config)
-app.include_router(create_auth_router(config))
+
+auth = AuthentikAuth(config)
+app.include_router(auth.router)
 
 
 @app.get("/api/secret")
-async def secret(user: dict = Depends(require_user)):
+async def secret(user: dict = Depends(auth.require_user)):
     return {"hello": user.get("preferred_username")}
 ```
+
+`auth.router` и `auth.require_user`/`auth.get_current_user` шарят один и тот же
+OAuth-клиент — это важно, потому что `require_user` при истёкшем токене сама
+делает refresh через тот же клиент (см. ниже), а не только читает cookie.
 
 ## Переменные окружения (`SSOConfig.from_env()`)
 
@@ -66,6 +66,27 @@ async def secret(user: dict = Depends(require_user)):
 2. **Applications → Create**, привязать к Provider.
 3. Взять `Client ID`/`Client Secret` и **OpenID Configuration Issuer** со
    страницы Provider — оттуда, не угадывать по slug.
+
+## Refresh токена
+
+`require_user`/`get_current_user` перед тем как отдать пользователя проверяют
+`expires_at` в сессии. Если токен истёк (с запасом 30 секунд) — делают refresh
+через `refresh_token` тем же OAuth-клиентом:
+
+- refresh прошёл — в сессии обновляются `id_token`/`refresh_token`/`expires_at`,
+  профиль пользователя (`user`) при этом не перевыпускается заново — он остаётся
+  таким же, каким был получен при первом логине (в refresh-ответе Authentik
+  необязательно присылает новый `id_token` с claims, поэтому мы не пытаемся
+  их перепарсить без nonce).
+- refresh не прошёл (`refresh_token` невалиден, отозван, Authentik не знает про
+  такую сессию — например, база Authentik была пересоздана) — сессия чистится,
+  `require_user` кидает 401, фронт уходит на `/login` заново.
+- `refresh_token` в сессии нет вообще (Authentik его не выдал) — то же самое,
+  сессия считается истёкшей по `expires_at` без возможности продлить.
+
+Без этого механизма cookie считалась бы валидной всё время жизни самой cookie
+(у `SessionMiddleware` это 14 дней по умолчанию), независимо от того, жив ли
+токен на стороне Authentik.
 
 ## Что пакет не делает (осознанно)
 
