@@ -1,0 +1,23 @@
+# --- Python packaging / build ---
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+*.whl
+
+# --- Virtualenvs ---
+venv/
+.venv/
+
+# --- Tests / tooling ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
