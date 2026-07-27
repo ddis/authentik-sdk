@@ -63,8 +63,15 @@ OAuth-клиент — это важно, потому что `require_user` п�
 
 1. **Providers → Create** → OAuth2/OpenID Provider, Client type **Confidential**,
    Redirect URI: `http://<host сервиса>/auth/callback`.
-2. **Applications → Create**, привязать к Provider.
-3. Взять `Client ID`/`Client Secret` и **OpenID Configuration Issuer** со
+2. В том же Provider, в разделе **Scopes** — добавить в "Выбранные области"
+   маппинг **`authentik default OAuth Mapping: OpenID 'offline_access'`**.
+   Без этого шага Authentik не будет выдавать `refresh_token` вообще
+   (даже если клиент его запрашивает через `AUTHENTIK_SCOPE`) — сессия
+   будет молча падать в 401 каждые ~5 минут (или сколько настроен Access
+   Token Validity), без возможности тихого refresh. Это шаг легко забыть —
+   он не выбран по умолчанию при создании Provider'а.
+3. **Applications → Create**, привязать к Provider.
+4. Взять `Client ID`/`Client Secret` и **OpenID Configuration Issuer** со
    страницы Provider — оттуда, не угадывать по slug.
 
 ## Refresh токена
@@ -82,7 +89,9 @@ OAuth-клиент — это важно, потому что `require_user` п�
   такую сессию — например, база Authentik была пересоздана) — сессия чистится,
   `require_user` кидает 401, фронт уходит на `/login` заново.
 - `refresh_token` в сессии нет вообще (Authentik его не выдал) — то же самое,
-  сессия считается истёкшей по `expires_at` без возможности продлить.
+  сессия считается истёкшей по `expires_at` без возможности продлить. Обычно
+  это значит, что у Provider'а в Authentik не подключён scope `offline_access`
+  (см. "Что нужно настроить в Authentik на каждый новый сервис" выше).
 
 Без этого механизма cookie считалась бы валидной всё время жизни самой cookie
 (у `SessionMiddleware` это 14 дней по умолчанию), независимо от того, жив ли
