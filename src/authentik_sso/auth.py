@@ -4,7 +4,7 @@ import time
 from urllib.parse import urlencode
 
 from authlib.integrations.starlette_client import OAuth
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from .config import SSOConfig
@@ -200,3 +200,21 @@ class AuthentikAuth:
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
         return user
+
+    def require_group(self, group: str):
+        """Возвращает FastAPI dependency: 403, если у пользователя нет `group`
+        в `groups`-claim'е (401, если он вообще не залогинен — через require_user).
+
+        Требует, чтобы `groups` реально приходил в userinfo — в Authentik это
+        отдельный custom Scope Mapping, добавленный в Provider и в
+        `AUTHENTIK_SCOPE` (см. README, "Роли/группы").
+
+        Usage: `async def endpoint(user: dict = Depends(auth.require_group("admins")))`.
+        """
+
+        async def dependency(user: dict = Depends(self.require_user)) -> dict:
+            if group not in (user.get("groups") or []):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+            return user
+
+        return dependency

@@ -97,12 +97,44 @@ OAuth-клиент — это важно, потому что `require_user` п�
 (у `SessionMiddleware` это 14 дней по умолчанию), независимо от того, жив ли
 токен на стороне Authentik.
 
+## Роли/группы (`require_group`)
+
+```python
+@app.get("/api/admin/stats")
+async def admin_stats(user: dict = Depends(auth.require_group("proposal-admins"))):
+    ...
+```
+
+403, если у пользователя нет указанной группы; 401, если не залогинен вообще
+(`require_group` сам вызывает `require_user` внутри).
+
+Чтобы `user["groups"]` вообще появился в userinfo, в Authentik нужно:
+
+1. **Customization → Property Mappings → Create** → Scope Mapping,
+   Scope name `groups`, Expression:
+   ```python
+   return {"groups": [group.name for group in request.user.ak_groups.all()]}
+   ```
+2. В Provider'е сервиса, в разделе **Scopes**, добавить этот маппинг в
+   "Выбранные области" (рядом с `offline_access`, см. выше).
+3. В `.env` сервиса добавить `groups` в `AUTHENTIK_SCOPE`, например:
+   `AUTHENTIK_SCOPE=openid profile email offline_access groups`.
+4. Завести в Authentik группу (например `proposal-admins`) и добавить в неё
+   нужных пользователей — `require_group("proposal-admins")` проверяет имя
+   группы буквально.
+
+Без этих шагов `user.get("groups")` будет `None`/отсутствовать, и
+`require_group` всегда будет отдавать 403 — это ожидаемо, а не баг SDK.
+
 ## Что пакет не делает (осознанно)
 
 - Не хранит сессию где-то централизованно (Redis и т.п.) — сессия каждого
   сервиса живёт в его собственной cookie. Если понадобится единая сессия на
   все сервисы — это отдельный шаг (shared session store + общий cookie domain),
   сюда пока не добавлено.
-- Не проверяет группы/роли из claims — это дело каждого сервиса: бери
-  `user["groups"]` (или как называется твой custom claim) из результата
-  `require_user`/`get_current_user` и решай сам, пускать ли дальше.
+- Рассчитан на один frontend-origin на сервис (`FRONTEND_URL`) — CORS и
+  редирект после `/auth/callback` всегда ведут на этот единственный адрес.
+  Если сервису нужно несколько независимых UI на разных hostname с общим
+  backend — это не поддерживается напрямую; варианты: (а) один frontend с
+  role-gated роутами (`require_group` + фильтрация UI по `user.groups`), либо
+  (б) доработка SDK под multi-origin allowlist (сюда пока не добавлено).
