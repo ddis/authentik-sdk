@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import time
 from urllib.parse import urlencode
 
@@ -6,6 +8,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from .config import SSOConfig
+
+logger = logging.getLogger(__name__)
 
 # сколько секунд запаса брать до истечения access/id-токена, чтобы не словить
 # протухший токен из-за задержки между проверкой и фактическим запросом
@@ -38,6 +42,15 @@ class AuthentikAuth:
             client_kwargs={"scope": config.scope},
         )
         self.router = self._build_router()
+        # single-flight для обновления токена: сессия — это подписанная cookie
+        # без общего server-side стора, поэтому несколько параллельных запросов
+        # с одним и тем же (ещё не обновлённым в их cookie) refresh_token могут
+        # одновременно попытаться его обменять. Держим один и тот же asyncio.Task
+        # на refresh_token, чтобы Authentik дёргался один раз, а все параллельные
+        # запросы получили один и тот же результат и записали его каждый в свою
+        # cookie — тогда неважно, чей Set-Cookie в итоге "победит" в браузере.
+        self._refresh_tasks: dict[str, asyncio.Task] = {}
+        self._refresh_tasks_guard = asyncio.Lock()
 
     @property
     def client(self):
@@ -111,13 +124,11 @@ class AuthentikAuth:
             return None
 
         try:
-            token = await self.client.fetch_access_token(
-                refresh_token=refresh_token,
-                grant_type="refresh_token",
-            )
+            token = await self._refresh_access_token(refresh_token)
         except Exception:
             # Authentik отклонил refresh — например, база пересоздана заново
             # и такого refresh_token/сессии там больше не существует
+            logger.warning("Token refresh failed for session", exc_info=True)
             request.session.clear()
             return None
 
@@ -125,6 +136,27 @@ class AuthentikAuth:
         request.session["refresh_token"] = token.get("refresh_token", refresh_token)
         request.session["expires_at"] = token.get("expires_at")
         return request.session["user"]
+
+    async def _refresh_access_token(self, refresh_token: str) -> dict:
+        """Обменивает refresh_token на новый access-токен, схлопывая параллельные
+        вызовы с одним и тем же refresh_token в один запрос к Authentik."""
+        async with self._refresh_tasks_guard:
+            task = self._refresh_tasks.get(refresh_token)
+            if task is None:
+                task = asyncio.ensure_future(
+                    self.client.fetch_access_token(
+                        refresh_token=refresh_token,
+                        grant_type="refresh_token",
+                    )
+                )
+                self._refresh_tasks[refresh_token] = task
+
+        try:
+            return await asyncio.shield(task)
+        finally:
+            async with self._refresh_tasks_guard:
+                if self._refresh_tasks.get(refresh_token) is task:
+                    del self._refresh_tasks[refresh_token]
 
     async def get_current_user(self, request: Request) -> dict | None:
         """Возвращает пользователя из сессии, освежая токен при необходимости, или None."""
