@@ -110,6 +110,7 @@ class AuthentikAuth:
     async def _get_valid_user(self, request: Request) -> dict | None:
         user = request.session.get("user")
         if not user:
+            logger.debug("No user in session (not logged in)")
             return None
 
         expires_at = request.session.get("expires_at")
@@ -120,6 +121,11 @@ class AuthentikAuth:
         if not refresh_token:
             # нечем освежить (провайдер не выдал refresh_token, либо мы его ещё
             # не сохраняли) — считаем сессию истёкшей
+            logger.warning(
+                "No refresh_token in session for user %r (expires_at=%r) — treating session as expired",
+                user.get("email") or user.get("preferred_username"),
+                expires_at,
+            )
             request.session.clear()
             return None
 
@@ -131,6 +137,19 @@ class AuthentikAuth:
             logger.warning("Token refresh failed for session", exc_info=True)
             request.session.clear()
             return None
+
+        # Диагностика подозрения "Authentik не отдаёт refresh_token на обновлении":
+        # .get(key, default) подставит default, ТОЛЬКО если ключа нет вообще;
+        # если Authentik явно прислал "refresh_token": null, вернётся None,
+        # а не старый refresh_token — сессия молча лишится возможности
+        # обновиться в следующий раз. Логируем оба случая, чтобы это увидеть.
+        if "refresh_token" not in token:
+            logger.info("Refresh response has no refresh_token key — reusing previous one")
+        elif token.get("refresh_token") is None:
+            logger.warning(
+                "Refresh response has refresh_token=None explicitly — session will lose it "
+                "instead of reusing the previous (still valid) one"
+            )
 
         request.session["id_token"] = token.get("id_token", request.session.get("id_token"))
         request.session["refresh_token"] = token.get("refresh_token", refresh_token)
