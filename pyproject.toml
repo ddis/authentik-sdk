@@ -1,6 +1,6 @@
 [project]
 name = "authentik-sso"
-version = "0.3.0"
+version = "0.3.2"
 description = "Reusable Authentik OIDC login/logout/session-check plumbing for FastAPI services"
 requires-python = ">=3.10"
 dependencies = [
