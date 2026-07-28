@@ -3,6 +3,7 @@ import logging
 import time
 from urllib.parse import urlencode
 
+from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -72,7 +73,18 @@ class AuthentikAuth:
 
         @router.get("/auth/callback")
         async def auth_callback(request: Request):
-            token = await client.authorize_access_token(request)
+            try:
+                token = await client.authorize_access_token(request)
+            except OAuthError as exc:
+                # Типове: код авторизації вже використаний (повторний /auth/callback,
+                # напр. через дубль-запит з фронта) або протух/не збігається redirect_uri.
+                logger.warning(
+                    "OAuth callback failed: error=%s description=%r state=%r",
+                    exc.error,
+                    exc.description,
+                    request.query_params.get("state"),
+                )
+                raise
             self._store_token(request, token)
             next_path = request.session.pop("next", "/")
             return RedirectResponse(f"{config.frontend_url}{next_path}")
