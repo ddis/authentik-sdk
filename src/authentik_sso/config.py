@@ -11,6 +11,13 @@ class SSOConfig:
     frontend_url: str
     scope: str = "openid profile email"
     session_same_site: str = "lax"
+    # server-side сессия (Redis) — cookie несёт только opaque sid, см. store.py.
+    # Отдельный namespace SESSION_REDIS_*, а не REDIS_HOST/PORT — чтобы не
+    # путать с собственным redis сервиса (например, под arq-очередь)
+    session_redis_host: str = "redis"
+    session_redis_port: int = 6379
+    session_redis_db: int = 1
+    session_ttl_seconds: int = 14 * 24 * 3600  # как дефолтный max_age SessionMiddleware
 
     @classmethod
     def from_env(cls) -> "SSOConfig":
@@ -24,4 +31,8 @@ class SSOConfig:
             session_secret=os.environ["SESSION_SECRET"],
             frontend_url=os.environ.get("FRONTEND_URL", "http://localhost:5173"),
             scope=os.environ.get("AUTHENTIK_SCOPE", "openid profile email"),
+            session_redis_host=os.environ.get("SESSION_REDIS_HOST", "redis"),
+            session_redis_port=int(os.environ.get("SESSION_REDIS_PORT", 6379)),
+            session_redis_db=int(os.environ.get("SESSION_REDIS_DB", 1)),
+            session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", 14 * 24 * 3600)),
         )

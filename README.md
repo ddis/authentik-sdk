@@ -58,6 +58,10 @@ OAuth-клиент — это важно, потому что `require_user` п�
 | `SESSION_SECRET`           | да          | Случайная строка для подписи cookie сессии                       |
 | `FRONTEND_URL`             | нет (default `http://localhost:5173`) | Куда редиректить после логина/логаута, и origin для CORS |
 | `AUTHENTIK_SCOPE`          | нет (default `openid profile email`) | Через пробел, добавляй свои кастомные scope-mapping'и |
+| `SESSION_REDIS_HOST`       | нет (default `redis`) | Хост Redis под server-side сессию (см. "Сессия (server-side, Redis)") |
+| `SESSION_REDIS_PORT`       | нет (default `6379`) | Порт Redis под сессию |
+| `SESSION_REDIS_DB`         | нет (default `1`)    | db-индекс, отдельный от возможной своей очереди сервиса (например arq на `0`) |
+| `SESSION_TTL_SECONDS`      | нет (default `1209600`, 14 дней) | Sliding TTL сессии в Redis |
 
 ## Что нужно настроить в Authentik на каждый новый сервис
 
@@ -126,12 +130,35 @@ async def admin_stats(user: dict = Depends(auth.require_group("proposal-admins")
 Без этих шагов `user.get("groups")` будет `None`/отсутствовать, и
 `require_group` всегда будет отдавать 403 — это ожидаемо, а не баг SDK.
 
+## Сессия (server-side, Redis)
+
+С 0.4.0 сессия хранится не в cookie, а в Redis: cookie несёт только opaque
+`sid` (`SessionMiddleware`, подписан `SESSION_SECRET`, как и раньше), а
+`user`/`id_token`/`refresh_token`/`expires_at` лежат в Redis по ключу
+`authentik-sso:session:<sid>`, TTL sliding (продлевается на каждый запрос,
+дефолт 14 дней — как раньше был `max_age` cookie). Так решена проблема
+переполнения `Set-Cookie` (браузерный лимит ~4KB) для юзеров с большим
+числом Authentik-групп.
+
+Свой db-индекс (`SESSION_REDIS_DB`, дефолт `1`), отдельный от того, что
+сервис может использовать под свою очередь задач (например arq на db `0`) —
+на одном физическом Redis, без коллизий ключей. Env-переменные:
+`SESSION_REDIS_HOST` (дефолт `redis`), `SESSION_REDIS_PORT` (дефолт `6379`),
+`SESSION_REDIS_DB` (дефолт `1`), `SESSION_TTL_SECONDS` (дефолт `1209600`).
+
+Redis тут — обязательная зависимость рантайма (не опциональная): если он
+недоступен, `require_user`/`get_current_user` отдают "не залогинен" (401),
+никогда не 500 — но залогиниться/остаться залогиненным без Redis нельзя.
+Сессии не переживают потерю данных Redis (рестарт без persistence-volume,
+`FLUSHDB` и т.п.) — это осознанный компромисс: единственная альтернатива
+была бы или снова раздувать cookie, или тащить persistence как обязательное
+требование к инфраструктуре потребителя.
+
 ## Что пакет не делает (осознанно)
 
-- Не хранит сессию где-то централизованно (Redis и т.п.) — сессия каждого
-  сервиса живёт в его собственной cookie. Если понадобится единая сессия на
-  все сервисы — это отдельный шаг (shared session store + общий cookie domain),
-  сюда пока не добавлено.
+- Сессия каждого сервиса всё ещё изолирована — своя cookie, свой Redis/db-индекс.
+  Если понадобится единая сессия на все сервисы — это отдельный шаг (shared
+  session store + общий cookie domain), сюда пока не добавлено.
 - Рассчитан на один frontend-origin на сервис (`FRONTEND_URL`) — CORS и
   редирект после `/auth/callback` всегда ведут на этот единственный адрес.
   Если сервису нужно несколько независимых UI на разных hostname с общим

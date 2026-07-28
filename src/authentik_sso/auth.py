@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import secrets
 import time
 from urllib.parse import urlencode
 
@@ -9,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from .config import SSOConfig
+from .store import SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +45,14 @@ class AuthentikAuth:
             client_kwargs={"scope": config.scope},
         )
         self.router = self._build_router()
-        # single-flight для обновления токена: сессия — это подписанная cookie
-        # без общего server-side стора, поэтому несколько параллельных запросов
-        # с одним и тем же (ещё не обновлённым в их cookie) refresh_token могут
-        # одновременно попытаться его обменять. Держим один и тот же asyncio.Task
-        # на refresh_token, чтобы Authentik дёргался один раз, а все параллельные
-        # запросы получили один и тот же результат и записали его каждый в свою
-        # cookie — тогда неважно, чей Set-Cookie в итоге "победит" в браузере.
+        self.store = SessionStore(config)
+        # single-flight для обновления токена в рамках одного процесса: несколько
+        # параллельных запросов с одним и тем же (ещё не обновлённым в Redis)
+        # refresh_token могут одновременно попытаться его обменять. Держим один
+        # и тот же asyncio.Task на refresh_token, чтобы Authentik дёргался один
+        # раз, а все параллельные запросы получили один и тот же результат.
+        # Не защищает от гонки между разными репликами backend — там нужен был
+        # бы распределённый lock в Redis, это отдельный шаг, пока не сделан.
         self._refresh_tasks: dict[str, asyncio.Task] = {}
         self._refresh_tasks_guard = asyncio.Lock()
 
@@ -85,13 +88,22 @@ class AuthentikAuth:
                     request.query_params.get("state"),
                 )
                 raise
-            self._store_token(request, token)
+            await self._store_token(request, token)
             next_path = request.session.pop("next", "/")
             return RedirectResponse(f"{config.frontend_url}{next_path}")
 
         @router.get("/logout")
         async def logout(request: Request):
-            id_token = request.session.get("id_token")
+            sid = request.session.get("sid")
+            id_token = None
+            if sid:
+                try:
+                    data = await self.store.pop(sid)
+                    id_token = data.get("id_token") if data else None
+                except Exception:
+                    logger.warning(
+                        "Session store unavailable during logout for sid=...%s", sid[-8:], exc_info=True
+                    )
             request.session.clear()
 
             metadata = await client.load_server_metadata()
@@ -113,31 +125,60 @@ class AuthentikAuth:
 
         return router
 
-    def _store_token(self, request: Request, token: dict) -> None:
-        request.session["user"] = token["userinfo"]
-        request.session["id_token"] = token.get("id_token")
-        request.session["refresh_token"] = token.get("refresh_token")
-        request.session["expires_at"] = token.get("expires_at")
+    async def _store_token(self, request: Request, token: dict) -> None:
+        # новый sid при каждом логине (session-fixation hygiene), а не переиспользование
+        sid = secrets.token_urlsafe(32)
+        await self.store.set(
+            sid,
+            {
+                "user": token["userinfo"],
+                "id_token": token.get("id_token"),
+                "refresh_token": token.get("refresh_token"),
+                "expires_at": token.get("expires_at"),
+            },
+        )
+        request.session["sid"] = sid
         logger.info(
-            "Login token stored: keys=%s has_refresh_token=%s expires_at=%r",
-            sorted(token.keys()),
+            "Login token stored: sid=...%s has_refresh_token=%s expires_at=%r",
+            sid[-8:],
             token.get("refresh_token") is not None,
             token.get("expires_at"),
         )
 
+    async def _invalidate(self, request: Request, sid: str) -> None:
+        try:
+            await self.store.delete(sid)
+        except Exception:
+            pass
+        request.session.clear()
+
     async def _get_valid_user(self, request: Request) -> dict | None:
         rid = hex(id(request))[-6:]  # короткий маркер, чтобы сопоставлять строки лога одного запроса
 
-        user = request.session.get("user")
-        if not user:
-            logger.debug("[%s] No user in session (not logged in)", rid)
+        sid = request.session.get("sid")
+        if not sid:
+            logger.debug("[%s] No sid in session (not logged in)", rid)
             return None
 
-        expires_at = request.session.get("expires_at")
+        try:
+            data = await self.store.get(sid)
+        except Exception:
+            # Redis недоступен — деградируем в "не залогинен", а не в 500
+            logger.warning("[%s] Session store unavailable while resolving sid=...%s", rid, sid[-8:], exc_info=True)
+            return None
+
+        if not data:
+            # TTL истёк, ключ эвикшнулся, либо это cookie старого (pre-Redis) формата
+            logger.debug("[%s] No session data for sid=...%s — treating as expired", rid, sid[-8:])
+            request.session.clear()
+            return None
+
+        user = data.get("user")
+        expires_at = data.get("expires_at")
         if expires_at is not None and time.time() < expires_at - EXPIRY_LEEWAY_SECONDS:
             return user
 
-        refresh_token = request.session.get("refresh_token")
+        refresh_token = data.get("refresh_token")
         if not refresh_token:
             # нечем освежить (провайдер не выдал refresh_token, либо мы его ещё
             # не сохраняли) — считаем сессию истёкшей
@@ -147,7 +188,7 @@ class AuthentikAuth:
                 user.get("email") or user.get("preferred_username"),
                 expires_at,
             )
-            request.session.clear()
+            await self._invalidate(request, sid)
             return None
 
         logger.info("[%s] Refreshing access token (refresh_token=...%s)", rid, refresh_token[-8:])
@@ -158,7 +199,7 @@ class AuthentikAuth:
             # Authentik отклонил refresh — например, база пересоздана заново
             # и такого refresh_token/сессии там больше не существует
             logger.warning("[%s] Token refresh failed for session", rid, exc_info=True)
-            request.session.clear()
+            await self._invalidate(request, sid)
             return None
 
         # Полный состав ответа Authentik на каждое обновление — чтобы видеть
@@ -173,10 +214,19 @@ class AuthentikAuth:
             token.get("expires_at"),
         )
 
-        request.session["id_token"] = token.get("id_token", request.session.get("id_token"))
-        request.session["refresh_token"] = token.get("refresh_token", refresh_token)
-        request.session["expires_at"] = token.get("expires_at")
-        return request.session["user"]
+        data["id_token"] = token.get("id_token", data.get("id_token"))
+        data["refresh_token"] = token.get("refresh_token", refresh_token)
+        data["expires_at"] = token.get("expires_at")
+        try:
+            await self.store.set(sid, data)
+        except Exception:
+            logger.warning(
+                "[%s] Could not persist refreshed token for sid=...%s (will re-refresh next request)",
+                rid,
+                sid[-8:],
+                exc_info=True,
+            )
+        return user
 
     async def _refresh_access_token(self, refresh_token: str) -> dict:
         """Обменивает refresh_token на новый access-токен, схлопывая параллельные
