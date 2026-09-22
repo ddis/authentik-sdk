@@ -32,8 +32,6 @@ EXPIRY_LEEWAY_SECONDS = 30
 # safe margin for service-to-service (m2m) calls
 EXPIRY_LEEWAY_M2M_SECONDS = 10
 
-AUTHENTIK_ISSUER = "http://authentik.local/application/o/{slug}/"
-AUTHENTIK_JWKS_URL = "http://authentik.local/application/o/{slug}/jwks/"
 
 class AuthentikAuth:
     """OIDC-клиент Authentik: роутер (/login, /auth/callback, /logout, /api/me)
@@ -297,6 +295,14 @@ class AuthentikAuth:
 
         return dependency
 
+    def _build_issuer_url(self, slug: str) -> str:
+        base_url, _ = self.config.issuer.split("/o/")
+        return f"{base_url}/{slug}/"
+
+    def _build_jwks_url(self, slug: str) -> str:
+        base_url, _ = self.config.jwks_url.split("/o/")
+        return f"{base_url}/{slug}/jwks/"
+
     async def _verify_m2m_jwt(self, slug, auth_bearer: HTTPAuthorizationCredentials = Security(HTTPBearer())):
         """A helper to make FastAPI dependency for service-to-service (m2m) HTTP calls.
 
@@ -316,13 +322,13 @@ class AuthentikAuth:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token len: {parts}")
 
         try:
-            jwks_client = jwt.PyJWKClient(AUTHENTIK_JWKS_URL.format(slug=slug))
+            jwks_client = jwt.PyJWKClient(self._build_jwks_url(slug))
             signing_key = jwks_client.get_signing_key_from_jwt(token)
             payload = jwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["RS256"],
-                issuer=AUTHENTIK_ISSUER.format(slug=slug),
+                issuer=self._build_issuer_url(slug),
                 options={
                     "verify_signature": True,  # 1. Always verify cryptographic signature via JWKS
                     "verify_exp": True,        # 2. Enforce token expiration
