@@ -3,13 +3,12 @@ import logging
 import secrets
 import time
 from enum import StrEnum
-from functools import partial
 from urllib.parse import urlencode
 
 import jwt
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.starlette_client import OAuth
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -297,13 +296,13 @@ class AuthentikAuth:
 
     def _build_issuer_url(self, slug: str) -> str:
         base_url, _ = self.config.issuer.split("/o/")
-        return f"{base_url}/{slug}/"
+        return f"{base_url}/o/{slug}/"
 
     def _build_jwks_url(self, slug: str) -> str:
         base_url, _ = self.config.jwks_url.split("/o/")
-        return f"{base_url}/{slug}/jwks/"
+        return f"{base_url}/o/{slug}/jwks/"
 
-    async def _verify_m2m_jwt(self, slug, auth_bearer: HTTPAuthorizationCredentials = Security(HTTPBearer())):
+    async def _verify_m2m_jwt(self, slug, auth_bearer: HTTPAuthorizationCredentials):
         """A helper to make FastAPI dependency for service-to-service (m2m) HTTP calls.
 
         Currently only signted (JWS) tokens are supported, not yet supported encrypted ones (JWE).
@@ -342,7 +341,18 @@ class AuthentikAuth:
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {str(e)}")
 
-    require_staff_token = partial(_verify_m2m_jwt, slug=Service.STAFF)
-    require_proposal_token = partial(_verify_m2m_jwt, slug=Service.PROPOSAL)
-    require_headquarters_token = partial(_verify_m2m_jwt, slug=Service.HEADQUARTERS)
-    require_avtologistic_token = partial(_verify_m2m_jwt, slug=Service.AVTOLOGISTIC)
+    async def require_staff_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+        """Usage: async def endpoint(data: dict = Depends(auth.require_staff_token))"""
+        return await self._verify_m2m_jwt(Service.STAFF, auth_bearer)
+
+    async def require_headquarters_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+        """Usage: async def endpoint(data: dict = Depends(auth.require_headquarters_token))"""
+        return await self._verify_m2m_jwt(Service.HEADQUARTERS, auth_bearer)
+
+    async def require_proposal_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+        """Usage: async def endpoint(data: dict = Depends(auth.require_proposal_token))"""
+        return await self._verify_m2m_jwt(Service.PROPOSAL, auth_bearer)
+
+    async def require_avtologistic_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+        """Usage: async def endpoint(data: dict = Depends(auth.require_avtologistic_token))"""
+        return await self._verify_m2m_jwt(Service.AVTOLOGISTIC, auth_bearer)
