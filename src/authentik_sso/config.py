@@ -5,6 +5,7 @@ from dataclasses import dataclass
 @dataclass
 class SSOConfig:
     issuer: str
+    jwks_url: str
     client_id: str
     client_secret: str
     session_secret: str
@@ -21,11 +22,9 @@ class SSOConfig:
 
     @classmethod
     def from_env(cls) -> "SSOConfig":
-        issuer = os.environ["AUTHENTIK_ISSUER"]
-        if not issuer.endswith("/"):
-            issuer += "/"
         return cls(
-            issuer=issuer,
+            issuer=os.environ["AUTHENTIK_ISSUER"].rstrip("/") + "/",
+            jwks_url=os.environ["AUTHENTIK_JWKS_URL"].rstrip("/") + "/",
             client_id=os.environ["AUTHENTIK_CLIENT_ID"],
             client_secret=os.environ["AUTHENTIK_CLIENT_SECRET"],
             session_secret=os.environ["SESSION_SECRET"],
