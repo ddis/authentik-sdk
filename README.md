@@ -130,6 +130,30 @@ async def admin_stats(user: dict = Depends(auth.require_group("proposal-admins")
 Без этих шагов `user.get("groups")` будет `None`/отсутствовать, и
 `require_group` всегда будет отдавать 403 — это ожидаемо, а не баг SDK.
 
+### RBAC-роли Authentik (`require_role`)
+
+```python
+@app.get("/api/ledger")
+async def ledger(user: dict = Depends(auth.require_role("bookkeeper"))):
+    ...
+```
+
+Работает как `require_group`, но проверяет claim `user["roles"]`. Роли из
+**Directory → Roles** в токен сами не попадают — нужен свой Scope Mapping:
+
+1. **Customization → Property Mappings → Create** → Scope Mapping,
+   Scope name `roles`, Expression (имена ролей, назначенных группам
+   пользователя; точное выражение зависит от версии Authentik — проверить
+   кнопкой Test):
+   ```python
+   roles = set()
+   for g in request.user.all_groups():
+       roles.update(r.name for r in g.roles.all())
+   return {"roles": sorted(roles)}
+   ```
+2. Добавить маппинг в **Scopes** Provider'а и `roles` в `AUTHENTIK_SCOPE`.
+3. Перелогиниться: claims кладутся в сессию при входе.
+
 ## Сессия (server-side, Redis)
 
 С 0.4.0 сессия хранится не в cookie, а в Redis: cookie несёт только opaque

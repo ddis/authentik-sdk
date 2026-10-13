@@ -276,6 +276,16 @@ class AuthentikAuth:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
         return user
 
+    def _require_claim(self, claim: str, value: str):
+        """Dependency: 403, если `value` нет в списке `claim` у пользователя (401 — через require_user)."""
+
+        async def dependency(user: dict = Depends(self.require_user)) -> dict:
+            if value not in (user.get(claim) or []):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+            return user
+
+        return dependency
+
     def require_group(self, group: str):
         """Возвращает FastAPI dependency: 403, если у пользователя нет `group`
         в `groups`-claim'е (401, если он вообще не залогинен — через require_user).
@@ -286,13 +296,15 @@ class AuthentikAuth:
 
         Usage: `async def endpoint(user: dict = Depends(auth.require_group("admins")))`.
         """
+        return self._require_claim("groups", group)
 
-        async def dependency(user: dict = Depends(self.require_user)) -> dict:
-            if group not in (user.get("groups") or []):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-            return user
+    def require_role(self, role: str):
+        """Как `require_group`, но проверяет `roles`-claim (RBAC-роли Authentik,
+        отдаются отдельным custom Scope Mapping `roles`, см. README).
 
-        return dependency
+        Usage: `async def endpoint(user: dict = Depends(auth.require_role("clerk")))`.
+        """
+        return self._require_claim("roles", role)
 
     def _build_issuer_url(self, slug: str) -> str:
         base_url, _ = self.config.issuer.split("/o/")
