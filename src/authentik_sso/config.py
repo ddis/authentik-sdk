@@ -1,7 +1,5 @@
 import os
-from dataclasses import dataclass, field
-
-_SERVICE_URL_PREFIX = "SERVICE_URL_"
+from dataclasses import dataclass
 
 
 @dataclass
@@ -20,11 +18,10 @@ class SSOConfig:
     session_redis_port: int = 6379
     session_redis_db: int = 1
     session_ttl_seconds: int = 14 * 24 * 3600  # как дефолтный max_age SessionMiddleware
+    environment: str = "local"  # local / dev / prod
     # m2m caller side; only services that call other services set these (see README "M2M")
     service_client_id: str | None = None
     service_client_secret: str | None = None
-    service_domain: str | None = None  # local / develop / internal
-    service_urls: dict[str, str] = field(default_factory=dict)  # {"REGISTRY": "http://..."}
 
     @classmethod
     def from_env(cls) -> "SSOConfig":
@@ -39,12 +36,7 @@ class SSOConfig:
             session_redis_port=int(os.environ.get("SESSION_REDIS_PORT", 6379)),
             session_redis_db=int(os.environ.get("SESSION_REDIS_DB", 1)),
             session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", 14 * 24 * 3600)),
+            environment=os.environ.get("ENVIRONMENT") or "local",
             service_client_id=os.environ.get("SERVICE_CLIENT_ID") or None,
             service_client_secret=os.environ.get("SERVICE_CLIENT_SECRET") or None,
-            service_domain=os.environ.get("SERVICE_DOMAIN") or None,
-            service_urls={
-                key[len(_SERVICE_URL_PREFIX) :]: value
-                for key, value in os.environ.items()
-                if key.startswith(_SERVICE_URL_PREFIX) and value
-            },
         )

@@ -2,12 +2,11 @@
 
 Entry point is `AuthentikAuth.service_client(name)`; settings come from `SSOConfig`:
 
-    base URL  http://api.registry.{service_domain}   (service_urls["REGISTRY"] overrides)
+    base URL  http://api.registry.local | .develop | .internal   (ENVIRONMENT local | dev | prod)
     token     client_credentials of this service's `<svc>-m2m` provider, cached until exp - 30s
 """
 
 import asyncio
-import re
 import time
 import uuid
 from collections.abc import Callable
@@ -36,19 +35,17 @@ def token_url_from_issuer(issuer: str) -> str:
     return f"{base_url}/o/token/"
 
 
-def env_key(name: str) -> str:
-    """'avto.logistic' -> 'AVTO_LOGISTIC' (suffix of SERVICE_URL_<NAME>)."""
-    return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+# ENVIRONMENT -> gateway domain (dev/prod resolve it via internal DNS, local via extra_hosts)
+SERVICE_DOMAINS = {"local": "local", "dev": "develop", "prod": "internal"}
 
 
 def service_url(config: SSOConfig, name: str) -> str:
-    """'registry' -> SERVICE_URL_REGISTRY or 'http://api.registry.{SERVICE_DOMAIN}'."""
-    overrides = {env_key(key): url for key, url in config.service_urls.items()}
-    if override := overrides.get(env_key(name)):
-        return override.rstrip("/")
-    if not config.service_domain:
-        raise RuntimeError(f"SERVICE_DOMAIN is not set (needed to reach service {name!r})")
-    return f"http://api.{name}.{config.service_domain}"
+    """'registry' + ENVIRONMENT=dev -> 'http://api.registry.develop'."""
+    try:
+        domain = SERVICE_DOMAINS[config.environment]
+    except KeyError:
+        raise RuntimeError(f"Unknown ENVIRONMENT {config.environment!r}, expected one of {list(SERVICE_DOMAINS)}")
+    return f"http://api.{name}.{domain}"
 
 
 class ServiceTokenProvider:

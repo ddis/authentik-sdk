@@ -1,5 +1,4 @@
 import asyncio
-import os
 
 import httpx
 import jwt
@@ -124,50 +123,47 @@ def test_token_url_from_issuer():
     )
 
 
-def test_service_url():
-    assert services.service_url(make_config(service_domain="develop"), "registry") == "http://api.registry.develop"
-    config = make_config(service_domain="develop", service_urls={"AVTO_LOGISTIC": "http://127.0.0.1:8001/"})
-    assert services.service_url(config, "avto.logistic") == "http://127.0.0.1:8001"
+@pytest.mark.parametrize(
+    "environment, url",
+    [("local", "http://api.registry.local"), ("dev", "http://api.registry.develop"), ("prod", "http://api.registry.internal")],
+)
+def test_service_url_from_environment(environment, url):
+    assert services.service_url(make_config(environment=environment), "registry") == url
 
 
-def test_service_url_needs_domain():
-    with pytest.raises(RuntimeError):
-        services.service_url(make_config(), "registry")
+def test_service_url_unknown_environment():
+    with pytest.raises(RuntimeError, match="ENVIRONMENT"):
+        services.service_url(make_config(environment="staging"), "registry")
+
+
+BASE_ENV = {
+    "AUTHENTIK_ISSUER": "http://authentik.local/application/o/accounting",
+    "AUTHENTIK_CLIENT_ID": "accounting",
+    "AUTHENTIK_CLIENT_SECRET": "s",
+    "SESSION_SECRET": "x",
+}
 
 
 def test_config_from_env(monkeypatch):
-    for key, value in {
-        "AUTHENTIK_ISSUER": "http://authentik.local/application/o/accounting",
-        "AUTHENTIK_CLIENT_ID": "accounting",
-        "AUTHENTIK_CLIENT_SECRET": "s",
-        "SESSION_SECRET": "x",
-        "SERVICE_CLIENT_ID": "accounting-m2m-id",
-        "SERVICE_CLIENT_SECRET": "m2m-secret",
-        "SERVICE_DOMAIN": "develop",
-        "SERVICE_URL_REGISTRY": "http://127.0.0.1:8002",
-        "SERVICE_URL_STAFF": "",
-    }.items():
+    env = {**BASE_ENV, "ENVIRONMENT": "dev", "SERVICE_CLIENT_ID": "m2m-id", "SERVICE_CLIENT_SECRET": "m2m-secret"}
+    for key, value in env.items():
         monkeypatch.setenv(key, value)
     config = SSOConfig.from_env()
     assert config.issuer == "http://authentik.local/application/o/accounting/"
-    assert (config.service_client_id, config.service_client_secret) == ("accounting-m2m-id", "m2m-secret")
-    assert config.service_domain == "develop"
-    assert config.service_urls == {"REGISTRY": "http://127.0.0.1:8002"}
+    assert (config.environment, config.service_client_id, config.service_client_secret) == (
+        "dev",
+        "m2m-id",
+        "m2m-secret",
+    )
 
 
-def test_config_from_env_without_m2m(monkeypatch):
-    for key in list(os.environ):
-        if key.startswith("SERVICE_"):
-            monkeypatch.delenv(key)
-    for key, value in {
-        "AUTHENTIK_ISSUER": "http://authentik.local/application/o/headquarters/",
-        "AUTHENTIK_CLIENT_ID": "hq",
-        "AUTHENTIK_CLIENT_SECRET": "s",
-        "SESSION_SECRET": "x",
-    }.items():
+def test_config_from_env_defaults(monkeypatch):
+    for key in ("ENVIRONMENT", "SERVICE_CLIENT_ID", "SERVICE_CLIENT_SECRET"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in BASE_ENV.items():
         monkeypatch.setenv(key, value)
     config = SSOConfig.from_env()
-    assert (config.service_client_id, config.service_domain, config.service_urls) == (None, None, {})
+    assert (config.environment, config.service_client_id, config.service_client_secret) == ("local", None, None)
 
 
 class Target:
@@ -190,7 +186,7 @@ class Target:
 @pytest.fixture
 def auth(provider):
     """Caller-side auth (Accounting) with the fake token endpoint."""
-    auth = AuthentikAuth(make_config(service_domain="local"))
+    auth = AuthentikAuth(make_config())
     auth._service_tokens = provider
     return auth
 
@@ -248,6 +244,6 @@ def test_auth_token_provider_from_config():
 
 
 def test_service_client_needs_credentials():
-    auth = AuthentikAuth(make_config(service_domain="local"))
+    auth = AuthentikAuth(make_config())
     with pytest.raises(RuntimeError, match="SERVICE_CLIENT_ID"):
         auth.service_client("registry")
