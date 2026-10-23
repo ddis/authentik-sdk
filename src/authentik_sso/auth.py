@@ -5,7 +5,6 @@ import time
 from enum import StrEnum
 from urllib.parse import urlencode
 
-import jwt
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -13,6 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import SSOConfig
+from .m2m import EXPIRY_LEEWAY_M2M_SECONDS, M2MVerifier  # noqa: F401 (re-export)
 from .store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -27,9 +27,6 @@ class Service(StrEnum):
 # сколько секунд запаса брать до истечения access/id-токена, чтобы не словить
 # протухший токен из-за задержки между проверкой и фактическим запросом
 EXPIRY_LEEWAY_SECONDS = 30
-
-# safe margin for service-to-service (m2m) calls
-EXPIRY_LEEWAY_M2M_SECONDS = 10
 
 
 class AuthentikAuth:
@@ -68,6 +65,7 @@ class AuthentikAuth:
         # бы распределённый lock в Redis, это отдельный шаг, пока не сделан.
         self._refresh_tasks: dict[str, asyncio.Task] = {}
         self._refresh_tasks_guard = asyncio.Lock()
+        self.m2m = M2MVerifier(config.issuer, config.jwks_url)
 
     @property
     def client(self):
@@ -306,52 +304,17 @@ class AuthentikAuth:
         """
         return self._require_claim("roles", role)
 
-    def _build_issuer_url(self, slug: str) -> str:
-        base_url, _ = self.config.issuer.split("/o/")
-        return f"{base_url}/o/{slug}/"
+    def require_service(self, *names: str, audience: str | None = None):
+        """FastAPI dependency for service-to-service (m2m) endpoints.
 
-    def _build_jwks_url(self, slug: str) -> str:
-        base_url, _ = self.config.jwks_url.split("/o/")
-        return f"{base_url}/o/{slug}/jwks/"
+        Usage: `async def endpoint(svc: dict = Depends(auth.require_service("accounting")))`
+        -> `{"caller": "accounting", "on_behalf_of": "<user sub>" | None}`; see `m2m.M2MVerifier`.
+        """
+        return self.m2m.require_service(*names, audience=audience)
 
     async def _verify_m2m_jwt(self, slug, auth_bearer: HTTPAuthorizationCredentials):
-        """A helper to make FastAPI dependency for service-to-service (m2m) HTTP calls.
-
-        Currently only signted (JWS) tokens are supported, not yet supported encrypted ones (JWE).
-
-        Required settings in callee Service:
-          1) Service -> Provider -> Protocol Settings
-             Signing Key is set to "authentik Self-signed Certificate"
-          2) Service -> Provider -> Advanced Protocol Settings
-             Encryption Key is unset
-        """
-        token = auth_bearer.credentials
-        logger.debug("M2M token received: %s", token)
-
-        if (parts := len(token.split("."))) != 3:
-            logger.error(f"Unexpected M2M Token Segment Count: %d", parts)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token len: {parts}")
-
-        try:
-            jwks_client = jwt.PyJWKClient(self._build_jwks_url(slug))
-            signing_key = jwks_client.get_signing_key_from_jwt(token)
-            payload = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256"],
-                issuer=self._build_issuer_url(slug),
-                options={
-                    "verify_signature": True,  # 1. Always verify cryptographic signature via JWKS
-                    "verify_exp": True,        # 2. Enforce token expiration
-                    "verify_nbf": True,        # 3. Enforce 'not before' time
-                    "verify_iss": True,        # 4. Enforce exact matching issuer
-                    "verify_aud": False,       # 5. Disable audience check (unless explicitly configured in Authentik)
-                },
-                leeway=EXPIRY_LEEWAY_M2M_SECONDS
-            )
-            return payload
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {str(e)}")
+        """Legacy per-service m2m check (issuer `<base>/o/<slug>/`); new code uses `require_service`."""
+        return await self.m2m.verify(slug, auth_bearer.credentials)
 
     async def require_staff_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
         """Usage: async def endpoint(data: dict = Depends(auth.require_staff_token))"""
