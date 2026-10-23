@@ -35,17 +35,9 @@ def token_url_from_issuer(issuer: str) -> str:
     return f"{base_url}/o/token/"
 
 
-# ENVIRONMENT -> gateway domain (dev/prod resolve it via internal DNS, local via extra_hosts)
-SERVICE_DOMAINS = {"local": "local", "dev": "develop", "prod": "internal"}
-
-
 def service_url(config: SSOConfig, name: str) -> str:
-    """'registry' + ENVIRONMENT=dev -> 'http://api.registry.develop'."""
-    try:
-        domain = SERVICE_DOMAINS[config.environment]
-    except KeyError:
-        raise RuntimeError(f"Unknown ENVIRONMENT {config.environment!r}, expected one of {list(SERVICE_DOMAINS)}")
-    return f"http://api.{name}.{domain}"
+    """'registry' + ENVIRONMENT=dev -> 'http://api.registry.develop' (DNS on servers, extra_hosts locally)."""
+    return f"http://api.{name}.{config.environment.service_domain}"
 
 
 class ServiceTokenProvider:

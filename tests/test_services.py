@@ -4,7 +4,7 @@ import httpx
 import jwt
 import pytest
 
-from authentik_sso import AuthentikAuth, SSOConfig, services
+from authentik_sso import AuthentikAuth, Environment, SSOConfig, services
 from authentik_sso.services import ServiceTokenError, ServiceTokenProvider
 from conftest import make_config
 
@@ -128,12 +128,7 @@ def test_token_url_from_issuer():
     [("local", "http://api.registry.local"), ("dev", "http://api.registry.develop"), ("prod", "http://api.registry.internal")],
 )
 def test_service_url_from_environment(environment, url):
-    assert services.service_url(make_config(environment=environment), "registry") == url
-
-
-def test_service_url_unknown_environment():
-    with pytest.raises(RuntimeError, match="ENVIRONMENT"):
-        services.service_url(make_config(environment="staging"), "registry")
+    assert services.service_url(make_config(environment=Environment(environment)), "registry") == url
 
 
 BASE_ENV = {
@@ -150,6 +145,7 @@ def test_config_from_env(monkeypatch):
         monkeypatch.setenv(key, value)
     config = SSOConfig.from_env()
     assert config.issuer == "http://authentik.local/application/o/accounting/"
+    assert config.environment is Environment.DEV
     assert (config.environment, config.service_client_id, config.service_client_secret) == (
         "dev",
         "m2m-id",
@@ -163,7 +159,15 @@ def test_config_from_env_defaults(monkeypatch):
     for key, value in BASE_ENV.items():
         monkeypatch.setenv(key, value)
     config = SSOConfig.from_env()
-    assert (config.environment, config.service_client_id, config.service_client_secret) == ("local", None, None)
+    assert config.environment is Environment.LOCAL
+    assert (config.service_client_id, config.service_client_secret) == (None, None)
+
+
+def test_config_from_env_rejects_unknown_environment(monkeypatch):
+    for key, value in {**BASE_ENV, "ENVIRONMENT": "develop"}.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError, match="develop"):
+        SSOConfig.from_env()
 
 
 class Target:

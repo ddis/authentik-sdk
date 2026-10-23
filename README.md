@@ -212,7 +212,7 @@ async with auth.service_client("registry", on_behalf_of=user_sub, request_id=rid
     r = await registry.put(f"/internal/v1/pool/by-source/accounting/{doc_id}", json=payload)
 ```
 
-- base URL `http://api.<name>.<domain>`, domain by `ENVIRONMENT`: `local` → `local`, `dev` → `develop`, `prod` → `internal`
+- base URL `http://api.<name>.<domain>`, domain by `ENVIRONMENT` (`config.environment.service_domain`): `local` → `local`, `dev` → `develop`, `prod` → `internal`
 - token from `<AUTHENTIK_ISSUER base>/o/token/`, one per `auth` (process), cached until `exp - 30s`; on 401 refetched and the request retried once
 - headers: `X-Request-ID` (given or generated, shared by the client's requests), `X-On-Behalf-Of` (when given)
 - token endpoint failure → `services.ServiceTokenError` (`status_code` is `None` for network errors)
@@ -222,7 +222,7 @@ All settings live in `SSOConfig.from_env()`; the m2m ones are optional and check
 | Env | Needed by | Example |
 |---|---|---|
 | `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET` | caller | from `<svc>-m2m` provider |
-| `ENVIRONMENT` | caller | `local` (default) / `dev` / `prod` |
+| `ENVIRONMENT` | all | `local` (default) / `dev` / `prod`; anything else fails `SSOConfig.from_env()` at startup |
 | `AUTHENTIK_ISSUER` | both | same Authentik host in every service of one environment (`iss` is built from the request host) |
 
 ### Upgrading to 0.6.0
