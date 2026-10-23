@@ -70,4 +70,11 @@ def fake_jwks(monkeypatch, signing_key):
 
 @pytest.fixture
 def anyio_backend():
+    """Runs `pytest.mark.anyio` tests on asyncio only.
+
+    Not called by name: the pytest mark makes anyio's pytest plugin pick it up, overriding
+    the plugin's default, which runs each test on every installed backend (asyncio, trio).
+
+    Authentik-sdk is asyncio-only (asyncio.Lock, to_thread), so we pin backend explicitly.
+    """
     return "asyncio"
