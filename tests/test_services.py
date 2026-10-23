@@ -1,12 +1,13 @@
 import asyncio
-import time
+import os
 
 import httpx
 import jwt
 import pytest
 
-from authentik_sso import services
+from authentik_sso import AuthentikAuth, SSOConfig, services
 from authentik_sso.services import ServiceTokenError, ServiceTokenProvider
+from conftest import make_config
 
 pytestmark = pytest.mark.anyio
 
@@ -123,17 +124,50 @@ def test_token_url_from_issuer():
     )
 
 
-def test_service_url(monkeypatch):
-    monkeypatch.setenv("SERVICE_DOMAIN", "develop")
-    assert services.service_url("registry") == "http://api.registry.develop"
-    monkeypatch.setenv("SERVICE_URL_AVTO_LOGISTIC", "http://127.0.0.1:8001/")
-    assert services.service_url("avto.logistic") == "http://127.0.0.1:8001"
+def test_service_url():
+    assert services.service_url(make_config(service_domain="develop"), "registry") == "http://api.registry.develop"
+    config = make_config(service_domain="develop", service_urls={"AVTO_LOGISTIC": "http://127.0.0.1:8001/"})
+    assert services.service_url(config, "avto.logistic") == "http://127.0.0.1:8001"
 
 
-def test_service_url_needs_domain(monkeypatch):
-    monkeypatch.delenv("SERVICE_DOMAIN", raising=False)
+def test_service_url_needs_domain():
     with pytest.raises(RuntimeError):
-        services.service_url("registry")
+        services.service_url(make_config(), "registry")
+
+
+def test_config_from_env(monkeypatch):
+    for key, value in {
+        "AUTHENTIK_ISSUER": "http://authentik.local/application/o/accounting",
+        "AUTHENTIK_CLIENT_ID": "accounting",
+        "AUTHENTIK_CLIENT_SECRET": "s",
+        "SESSION_SECRET": "x",
+        "SERVICE_CLIENT_ID": "accounting-m2m-id",
+        "SERVICE_CLIENT_SECRET": "m2m-secret",
+        "SERVICE_DOMAIN": "develop",
+        "SERVICE_URL_REGISTRY": "http://127.0.0.1:8002",
+        "SERVICE_URL_STAFF": "",
+    }.items():
+        monkeypatch.setenv(key, value)
+    config = SSOConfig.from_env()
+    assert config.issuer == "http://authentik.local/application/o/accounting/"
+    assert (config.service_client_id, config.service_client_secret) == ("accounting-m2m-id", "m2m-secret")
+    assert config.service_domain == "develop"
+    assert config.service_urls == {"REGISTRY": "http://127.0.0.1:8002"}
+
+
+def test_config_from_env_without_m2m(monkeypatch):
+    for key in list(os.environ):
+        if key.startswith("SERVICE_"):
+            monkeypatch.delenv(key)
+    for key, value in {
+        "AUTHENTIK_ISSUER": "http://authentik.local/application/o/headquarters/",
+        "AUTHENTIK_CLIENT_ID": "hq",
+        "AUTHENTIK_CLIENT_SECRET": "s",
+        "SESSION_SECRET": "x",
+    }.items():
+        monkeypatch.setenv(key, value)
+    config = SSOConfig.from_env()
+    assert (config.service_client_id, config.service_domain, config.service_urls) == (None, None, {})
 
 
 class Target:
@@ -153,11 +187,18 @@ class Target:
         return httpx.Response(200, json={"ok": True})
 
 
-async def test_client_sends_token_and_headers(monkeypatch, provider):
-    monkeypatch.setenv("SERVICE_DOMAIN", "local")
+@pytest.fixture
+def auth(provider):
+    """Caller-side auth (Accounting) with the fake token endpoint."""
+    auth = AuthentikAuth(make_config(service_domain="local"))
+    auth._service_tokens = provider
+    return auth
+
+
+async def test_client_sends_token_and_headers(auth, provider):
     target = Target()
-    async with services.client(
-        "registry", on_behalf_of="user-sub", token_provider=provider, transport=httpx.MockTransport(target)
+    async with auth.service_client(
+        "registry", on_behalf_of="user-sub", transport=httpx.MockTransport(target)
     ) as registry:
         await registry.put("/internal/v1/pool/by-source/accounting/1", json={})
         await registry.get("/internal/v1/pool/by-source/accounting/1")
@@ -169,22 +210,18 @@ async def test_client_sends_token_and_headers(monkeypatch, provider):
     assert first.headers["X-Request-ID"] and first.headers["X-Request-ID"] == second.headers["X-Request-ID"]
 
 
-async def test_client_request_id_passed_through_and_no_on_behalf_of(monkeypatch, provider):
-    monkeypatch.setenv("SERVICE_DOMAIN", "local")
+async def test_client_request_id_passed_through_and_no_on_behalf_of(auth, provider):
     target = Target()
-    async with services.client(
-        "registry", request_id="req-1", token_provider=provider, transport=httpx.MockTransport(target)
-    ) as registry:
+    async with auth.service_client("registry", request_id="req-1", transport=httpx.MockTransport(target)) as registry:
         await registry.get("/x")
     (request,) = target.requests
     assert request.headers["X-Request-ID"] == "req-1"
     assert "X-On-Behalf-Of" not in request.headers
 
 
-async def test_client_refetches_token_once_on_401(monkeypatch, provider, endpoint):
-    monkeypatch.setenv("SERVICE_DOMAIN", "local")
+async def test_client_refetches_token_once_on_401(auth, provider, endpoint):
     target = Target(reject=1)
-    async with services.client("registry", token_provider=provider, transport=httpx.MockTransport(target)) as c:
+    async with auth.service_client("registry", transport=httpx.MockTransport(target)) as c:
         r = await c.put("/x", json={"a": 1})
     assert r.status_code == 200
     assert len(endpoint.calls) == 2
@@ -193,20 +230,24 @@ async def test_client_refetches_token_once_on_401(monkeypatch, provider, endpoin
     assert target.requests[1].content == b'{"a":1}'
 
 
-async def test_client_gives_up_after_second_401(monkeypatch, provider, endpoint):
-    monkeypatch.setenv("SERVICE_DOMAIN", "local")
+async def test_client_gives_up_after_second_401(auth, provider, endpoint):
     target = Target(reject=5)
-    async with services.client("registry", token_provider=provider, transport=httpx.MockTransport(target)) as c:
+    async with auth.service_client("registry", transport=httpx.MockTransport(target)) as c:
         r = await c.get("/x")
     assert r.status_code == 401
     assert len(target.requests) == 2
 
 
-async def test_default_provider_from_env(monkeypatch):
-    monkeypatch.setattr(services, "_default_provider", None)
-    monkeypatch.setenv("AUTHENTIK_ISSUER", "http://authentik.local/application/o/accounting/")
-    monkeypatch.setenv("SERVICE_CLIENT_ID", "id")
-    monkeypatch.setenv("SERVICE_CLIENT_SECRET", "s")
-    provider = services.default_token_provider()
-    assert provider.token_url == "http://authentik.local/application/o/token/"
-    assert services.default_token_provider() is provider
+def test_auth_token_provider_from_config():
+    config = make_config(
+        issuer="http://authentik.local/application/o/accounting/", service_client_id="id", service_client_secret="s"
+    )
+    auth = AuthentikAuth(config)
+    assert auth.service_tokens.token_url == "http://authentik.local/application/o/token/"
+    assert auth.service_tokens is auth.service_tokens
+
+
+def test_service_client_needs_credentials():
+    auth = AuthentikAuth(make_config(service_domain="local"))
+    with pytest.raises(RuntimeError, match="SERVICE_CLIENT_ID"):
+        auth.service_client("registry")

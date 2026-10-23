@@ -2,27 +2,20 @@ import asyncio
 import logging
 import secrets
 import time
-from enum import StrEnum
 from urllib.parse import urlencode
 
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import SSOConfig
-from .m2m import EXPIRY_LEEWAY_M2M_SECONDS, M2MVerifier  # noqa: F401 (re-export)
+from . import services
+from .m2m import M2MVerifier
 from .store import SessionStore
 
 logger = logging.getLogger(__name__)
 
-
-class Service(StrEnum):
-    STAFF = "staff"
-    PROPOSAL = "proposal"
-    HEADQUARTERS = "headquarters"
-    AVTOLOGISTIC = "avto.logistic"
 
 # сколько секунд запаса брать до истечения access/id-токена, чтобы не словить
 # протухший токен из-за задержки между проверкой и фактическим запросом
@@ -65,7 +58,8 @@ class AuthentikAuth:
         # бы распределённый lock в Redis, это отдельный шаг, пока не сделан.
         self._refresh_tasks: dict[str, asyncio.Task] = {}
         self._refresh_tasks_guard = asyncio.Lock()
-        self.m2m = M2MVerifier(config.issuer, config.jwks_url)
+        self.m2m = M2MVerifier(config.issuer)
+        self._service_tokens: services.ServiceTokenProvider | None = None
 
     @property
     def client(self):
@@ -312,22 +306,30 @@ class AuthentikAuth:
         """
         return self.m2m.require_service(*names, audience=audience)
 
-    async def _verify_m2m_jwt(self, slug, auth_bearer: HTTPAuthorizationCredentials):
-        """Legacy per-service m2m check (issuer `<base>/o/<slug>/`); new code uses `require_service`."""
-        return await self.m2m.verify(slug, auth_bearer.credentials)
+    @property
+    def service_tokens(self) -> services.ServiceTokenProvider:
+        """This service's m2m token (one per `auth`, i.e. per process); needs SERVICE_CLIENT_ID/SECRET."""
+        if self._service_tokens is None:
+            if not (self.config.service_client_id and self.config.service_client_secret):
+                raise RuntimeError("SERVICE_CLIENT_ID / SERVICE_CLIENT_SECRET are not set (needed for m2m calls)")
+            self._service_tokens = services.ServiceTokenProvider(
+                services.token_url_from_issuer(self.config.issuer),
+                self.config.service_client_id,
+                self.config.service_client_secret,
+            )
+        return self._service_tokens
 
-    async def require_staff_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
-        """Usage: async def endpoint(data: dict = Depends(auth.require_staff_token))"""
-        return await self._verify_m2m_jwt(Service.STAFF, auth_bearer)
+    def service_client(
+        self, name: str, *, on_behalf_of: str | None = None, request_id: str | None = None, **kwargs
+    ):
+        """`httpx.AsyncClient` for calling service `name` as this service; see `services.client`.
 
-    async def require_headquarters_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
-        """Usage: async def endpoint(data: dict = Depends(auth.require_headquarters_token))"""
-        return await self._verify_m2m_jwt(Service.HEADQUARTERS, auth_bearer)
-
-    async def require_proposal_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
-        """Usage: async def endpoint(data: dict = Depends(auth.require_proposal_token))"""
-        return await self._verify_m2m_jwt(Service.PROPOSAL, auth_bearer)
-
-    async def require_avtologistic_token(self, auth_bearer: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
-        """Usage: async def endpoint(data: dict = Depends(auth.require_avtologistic_token))"""
-        return await self._verify_m2m_jwt(Service.AVTOLOGISTIC, auth_bearer)
+        Usage: `async with auth.service_client("registry", on_behalf_of=sub) as registry: ...`
+        """
+        return services.client(
+            services.service_url(self.config, name),
+            self.service_tokens,
+            on_behalf_of=on_behalf_of,
+            request_id=request_id,
+            **kwargs,
+        )

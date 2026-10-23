@@ -1,15 +1,12 @@
 """Calling other services through the gateway, authenticated as this service.
 
-    async with services.client("registry", on_behalf_of=user_sub) as registry:
-        r = await registry.put("/internal/v1/pool/by-source/...", json=...)
+Entry point is `AuthentikAuth.service_client(name)`; settings come from `SSOConfig`:
 
-    base URL  http://api.registry.{SERVICE_DOMAIN}   (SERVICE_URL_REGISTRY overrides)
-    token     client_credentials of this service's `<svc>-m2m` provider
-              (SERVICE_CLIENT_ID / SERVICE_CLIENT_SECRET), cached per process until exp - 30s
+    base URL  http://api.registry.{service_domain}   (service_urls["REGISTRY"] overrides)
+    token     client_credentials of this service's `<svc>-m2m` provider, cached until exp - 30s
 """
 
 import asyncio
-import os
 import re
 import time
 import uuid
@@ -18,6 +15,7 @@ from collections.abc import Callable
 import httpx
 import jwt
 
+from .config import SSOConfig
 from .m2m import ON_BEHALF_OF_HEADER
 
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -38,15 +36,19 @@ def token_url_from_issuer(issuer: str) -> str:
     return f"{base_url}/o/token/"
 
 
-def service_url(name: str) -> str:
+def env_key(name: str) -> str:
+    """'avto.logistic' -> 'AVTO_LOGISTIC' (suffix of SERVICE_URL_<NAME>)."""
+    return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+
+
+def service_url(config: SSOConfig, name: str) -> str:
     """'registry' -> SERVICE_URL_REGISTRY or 'http://api.registry.{SERVICE_DOMAIN}'."""
-    override = os.environ.get(f"SERVICE_URL_{re.sub(r'[^A-Za-z0-9]', '_', name).upper()}")
-    if override:
+    overrides = {env_key(key): url for key, url in config.service_urls.items()}
+    if override := overrides.get(env_key(name)):
         return override.rstrip("/")
-    domain = os.environ.get("SERVICE_DOMAIN")
-    if not domain:
+    if not config.service_domain:
         raise RuntimeError(f"SERVICE_DOMAIN is not set (needed to reach service {name!r})")
-    return f"http://api.{name}.{domain}"
+    return f"http://api.{name}.{config.service_domain}"
 
 
 class ServiceTokenProvider:
@@ -72,14 +74,6 @@ class ServiceTokenProvider:
         self._token: str | None = None
         self._expires_at = 0.0
         self._lock = asyncio.Lock()
-
-    @classmethod
-    def from_env(cls) -> "ServiceTokenProvider":
-        return cls(
-            token_url=token_url_from_issuer(os.environ["AUTHENTIK_ISSUER"]),
-            client_id=os.environ["SERVICE_CLIENT_ID"],
-            client_secret=os.environ["SERVICE_CLIENT_SECRET"],
-        )
 
     def _cached(self) -> str | None:
         if self._token and self._clock() < self._expires_at - TOKEN_LEEWAY_SECONDS:
@@ -148,34 +142,19 @@ class ServiceAuth(httpx.Auth):
             yield request
 
 
-_default_provider: ServiceTokenProvider | None = None
-
-
-def default_token_provider() -> ServiceTokenProvider:
-    global _default_provider
-    if _default_provider is None:
-        _default_provider = ServiceTokenProvider.from_env()
-    return _default_provider
-
-
 def client(
-    name: str,
+    base_url: str,
+    token_provider: ServiceTokenProvider,
     *,
     on_behalf_of: str | None = None,
     request_id: str | None = None,
-    token_provider: ServiceTokenProvider | None = None,
     **kwargs,
 ) -> httpx.AsyncClient:
-    """`httpx.AsyncClient` for service `name`; all its requests share one X-Request-ID
-    (`request_id`, or a new one) and carry X-On-Behalf-Of when given. Extra kwargs go to httpx."""
+    """`httpx.AsyncClient` whose requests share one X-Request-ID (`request_id`, or a new one)
+    and carry X-On-Behalf-Of when given. Extra kwargs go to httpx."""
     headers = {REQUEST_ID_HEADER: request_id or uuid.uuid4().hex}
     if on_behalf_of:
         headers[ON_BEHALF_OF_HEADER] = on_behalf_of
     headers.update(kwargs.pop("headers", None) or {})
     kwargs.setdefault("timeout", 10.0)
-    return httpx.AsyncClient(
-        base_url=service_url(name),
-        headers=headers,
-        auth=ServiceAuth(token_provider or default_token_provider()),
-        **kwargs,
-    )
+    return httpx.AsyncClient(base_url=base_url, headers=headers, auth=ServiceAuth(token_provider), **kwargs)

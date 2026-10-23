@@ -43,16 +43,15 @@ class M2MVerifier:
     Signing Key = "authentik Self-signed Certificate", Encryption Key unset.
     """
 
-    def __init__(self, issuer: str, jwks_url: str):
+    def __init__(self, issuer: str):
         self._issuer_base = issuer.split("/o/")[0]
-        self._jwks_base = jwks_url.split("/o/")[0]
         self._jwks_clients: dict[str, jwt.PyJWKClient] = {}
 
     def issuer(self, slug: str) -> str:
         return f"{self._issuer_base}/o/{slug}/"
 
     def jwks_url(self, slug: str) -> str:
-        return f"{self._jwks_base}/o/{slug}/jwks/"
+        return f"{self._issuer_base}/o/{slug}/jwks/"
 
     def is_m2m_issuer(self, iss) -> bool:
         prefix = f"{self._issuer_base}/o/"

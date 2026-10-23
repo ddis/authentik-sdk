@@ -6,21 +6,13 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from authentik_sso import AuthentikAuth, SSOConfig
+from authentik_sso import AuthentikAuth
+from conftest import make_config
 
 
 @pytest.fixture
 def auth():
-    return AuthentikAuth(
-        SSOConfig(
-            issuer="http://authentik.local/application/o/registry/",
-            jwks_url="http://authentik-server:9000/application/o/registry/",
-            client_id="registry",
-            client_secret="secret",
-            session_secret="session",
-            frontend_url="http://localhost:5173",
-        )
-    )
+    return AuthentikAuth(make_config())
 
 
 @pytest.fixture
@@ -101,7 +93,7 @@ def test_audience_checked_when_given(api, make_token):
 def test_jwks_client_cached_per_process(api, make_token, fake_jwks):
     for _ in range(3):
         assert call(api, make_token("accounting-m2m")).status_code == 200
-    assert [c.uri for c in fake_jwks] == ["http://authentik-server:9000/application/o/accounting-m2m/jwks/"]
+    assert [c.uri for c in fake_jwks] == ["http://authentik.local/application/o/accounting-m2m/jwks/"]
 
 
 def test_jwks_unreachable_is_503(api, make_token, fake_jwks):
@@ -130,14 +122,3 @@ def test_require_service_needs_a_name(auth):
     with pytest.raises(ValueError):
         auth.require_service()
 
-
-def test_legacy_per_service_dependency_still_works(auth, fake_jwks, make_token):
-    app = FastAPI()
-
-    @app.get("/legacy")
-    async def legacy(data: dict = Depends(auth.require_staff_token)):
-        return {"iss": data["iss"]}
-
-    api = TestClient(app)
-    assert call(api, make_token("staff"), path="/legacy").status_code == 200
-    assert call(api, make_token("proposal"), path="/legacy").status_code == 401

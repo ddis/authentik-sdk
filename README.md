@@ -205,19 +205,19 @@ async def put_item(svc: ServiceCaller = Depends(auth.require_service("accounting
 - audience not checked; `require_service("accounting", audience="registry")` turns it on
 - JWKS client cached per process (per provider); raw tokens never logged
 
-### Caller: `services.client`
+### Caller: `auth.service_client`
 
 ```python
-from authentik_sso import services
-
-async with services.client("registry", on_behalf_of=user_sub, request_id=rid) as registry:
+async with auth.service_client("registry", on_behalf_of=user_sub, request_id=rid) as registry:
     r = await registry.put(f"/internal/v1/pool/by-source/accounting/{doc_id}", json=payload)
 ```
 
 - base URL `http://api.<name>.<SERVICE_DOMAIN>`; `SERVICE_URL_<NAME>` overrides (`avto.logistic` → `SERVICE_URL_AVTO_LOGISTIC`)
-- token from `<AUTHENTIK_ISSUER base>/o/token/`, cached per process until `exp - 30s`; on 401 refetched and the request retried once
+- token from `<AUTHENTIK_ISSUER base>/o/token/`, one per `auth` (process), cached until `exp - 30s`; on 401 refetched and the request retried once
 - headers: `X-Request-ID` (given or generated, shared by the client's requests), `X-On-Behalf-Of` (when given)
 - token endpoint failure → `services.ServiceTokenError` (`status_code` is `None` for network errors)
+
+All settings live in `SSOConfig.from_env()`; the m2m ones are optional and checked on the first call:
 
 | Env | Needed by | Example |
 |---|---|---|
@@ -226,14 +226,15 @@ async with services.client("registry", on_behalf_of=user_sub, request_id=rid) as
 | `SERVICE_URL_<NAME>` | caller, optional | `http://127.0.0.1:8001` |
 | `AUTHENTIK_ISSUER` | both | same Authentik host in every service of one environment (`iss` is built from the request host) |
 
-### Legacy
+### Upgrading to 0.6.0
 
-`require_staff_token` / `require_headquarters_token` / … (issuer `<base>/o/<service>/`) still work; new endpoints use `require_service`.
+- `AUTHENTIK_JWKS_URL` is no longer read (can be removed from `.env`)
+- `require_staff_token` / `require_headquarters_token` / `require_proposal_token` / `require_avtologistic_token` removed (unused); use `require_service` instead
 
 ## Tests
 
 ```bash
-pip install -e ".[test]" && pytest
+uv pip install -e ".[test]" && uv run pytest
 ```
 
 ## Что пакет не делает (осознанно)

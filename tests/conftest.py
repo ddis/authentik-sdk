@@ -8,6 +8,21 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 AUTHENTIK = "http://authentik.local/application"
 
 
+def make_config(**overrides):
+    from authentik_sso import SSOConfig
+
+    return SSOConfig(
+        **{
+            "issuer": f"{AUTHENTIK}/o/registry/",
+            "client_id": "registry",
+            "client_secret": "secret",
+            "session_secret": "session",
+            "frontend_url": "http://localhost:5173",
+            **overrides,
+        }
+    )
+
+
 @pytest.fixture(scope="session")
 def signing_key():
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
