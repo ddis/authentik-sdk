@@ -187,8 +187,13 @@ One Authentik provider `<svc>-m2m` per **calling** service; the callee checks th
 - **Providers → Create** → OAuth2/OpenID, Confidential, name/slug `<svc>-m2m` (e.g. `accounting-m2m`)
 - grant `client_credentials` only; no redirect URIs
 - Signing Key: `authentik Self-signed Certificate`; Encryption Key: unset
-- **Applications → Create**, bind to the provider
+- **Applications → Create**, bind to the provider; **slug `<svc>-m2m`** — the slug, not the provider name, makes `iss` (`…/o/accounting-m2m/`)
+- no policy / group / user bindings on that application (a binding can deny the token request)
 - Client ID / Secret → caller's `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET`
+
+### Login app is not reused
+
+The service's own login app (`<svc>`) issues user tokens with `iss …/o/<svc>/`; a service token from it couldn't be told apart from any user's, so callers get a separate `<svc>-m2m`.
 
 ### Callee: `require_service`
 
