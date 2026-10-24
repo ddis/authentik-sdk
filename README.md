@@ -188,7 +188,7 @@ One Authentik provider `<svc>-m2m` per **calling** service; the callee checks th
 - grant `client_credentials` only; no redirect URIs
 - Signing Key: `authentik Self-signed Certificate`; Encryption Key: unset
 - **Applications → Create**, bind to the provider; **slug `<svc>-m2m`** — the slug, not the provider name, makes `iss` (`…/o/accounting-m2m/`)
-- after the first token request, bind that application to the service account Authentik created for it (**Directory → Users**, e.g. `ak-accounting-m2m-client_credentials`) and nothing else: unbound, any user's app password could mint a `<svc>-m2m` token
+- no bindings needed: Authentik refuses a user's app password on this provider (`invalid_grant`), only its client secret gets a token
 - Client ID / Secret → caller's `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET`
 
 ### Login app is not reused
