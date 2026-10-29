@@ -64,8 +64,7 @@ class M2MVerifier:
 
     def _jwks_client(self, slug: str) -> jwt.PyJWKClient:
         # PyJWKClient caches the key set itself and refetches on an unknown `kid` (key rotation)
-        client = self._jwks_clients.get(slug)
-        if client is None:
+        if (client := self._jwks_clients.get(slug)) is None:
             client = self._jwks_clients[slug] = jwt.PyJWKClient(self.jwks_url(slug))
         return client
 
