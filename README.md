@@ -186,6 +186,7 @@ One Authentik provider `<svc>-m2m` per **calling** service; the callee checks th
 
 - **Providers → Create** → OAuth2/OpenID, Confidential, name/slug `<svc>-m2m` (e.g. `accounting-m2m`)
 - grant `client_credentials` only; no redirect URIs
+- Authorization flow: `default-provider-authorization-implicit-consent` — never runs for `client_credentials`, but the form requires one
 - Signing Key: `authentik Self-signed Certificate`; Encryption Key: unset
 - **Applications → Create**, bind to the provider; **slug `<svc>-m2m`** — the slug, not the provider name, makes `iss` (`…/o/accounting-m2m/`)
 - no bindings needed: Authentik refuses a user's app password on this provider (`invalid_grant`), only its client secret gets a token
