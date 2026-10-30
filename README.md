@@ -178,6 +178,70 @@ Redis тут — обязательная зависимость рантайм�
 была бы или снова раздувать cookie, или тащить persistence как обязательное
 требование к инфраструктуре потребителя.
 
+## M2M (service-to-service)
+
+One Authentik provider `<svc>-m2m` per **calling** service; the callee checks the token, the caller gets one via `client_credentials`.
+
+### Authentik setup (per calling service)
+
+- **Providers → Create** → OAuth2/OpenID, Confidential, name/slug `<svc>-m2m` (e.g. `accounting-m2m`)
+- grant `client_credentials` only; no redirect URIs
+- Authorization flow: `default-provider-authorization-implicit-consent` — never runs for `client_credentials`, but the form requires one
+- Signing Key: `authentik Self-signed Certificate`; Encryption Key: unset
+- **Applications → Create**, bind to the provider; **slug `<svc>-m2m`** — the slug, not the provider name, makes `iss` (`…/o/accounting-m2m/`)
+- no bindings needed: Authentik refuses a user's app password on this provider (`invalid_grant`), only its client secret gets a token
+- Client ID / Secret → caller's `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET`
+
+### Login app is not reused
+
+The service's own login app (`<svc>`) issues user tokens with `iss …/o/<svc>/`; a service token from it couldn't be told apart from any user's, so callers get a separate `<svc>-m2m`.
+
+### Callee: `require_service`
+
+```python
+@app.put("/internal/v1/pool/by-source/{caller}/{source_id}")
+async def put_item(svc: ServiceCaller = Depends(auth.require_service("accounting"))):
+    svc  # {"caller": "accounting", "on_behalf_of": "<user sub from X-On-Behalf-Of>" | None}
+```
+
+- token `iss` must be `<AUTHENTIK_ISSUER base>/o/<name>-m2m/` for a listed name
+- no / invalid / expired / user login token → 401
+- valid m2m token of a service not listed → 403
+- JWKS unreachable → 503 (caller should retry)
+- audience not checked; `require_service("accounting", audience="registry")` turns it on
+- JWKS client cached per process (per provider); raw tokens never logged
+
+### Caller: `auth.service_client`
+
+```python
+async with auth.service_client("registry", on_behalf_of=user_sub, request_id=rid) as registry:
+    r = await registry.put(f"/internal/v1/pool/by-source/accounting/{doc_id}", json=payload)
+```
+
+- base URL `http://api.<name>.<domain>`, domain by `ENVIRONMENT` (`config.environment.service_domain`): `local` → `local`, `dev` → `develop`, `prod` → `internal`
+- token from `<AUTHENTIK_ISSUER base>/o/token/`, one per `auth` (process), cached until `exp - 30s`; on 401 refetched and the request retried once
+- headers: `X-Request-ID` (given or generated, shared by the client's requests), `X-On-Behalf-Of` (when given)
+- token endpoint failure → `services.ServiceTokenError` (`status_code` is `None` for network errors)
+
+All settings live in `SSOConfig.from_env()`; the m2m ones are optional and checked on the first call:
+
+| Env | Needed by | Example |
+|---|---|---|
+| `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET` | caller | from `<svc>-m2m` provider |
+| `ENVIRONMENT` | all | `local` (default) / `dev` / `prod`; anything else fails `SSOConfig.from_env()` at startup |
+| `AUTHENTIK_ISSUER` | both | same Authentik host in every service of one environment (`iss` is built from the request host) |
+
+### Upgrading to 0.6.0
+
+- `AUTHENTIK_JWKS_URL` is no longer read (can be removed from `.env`)
+- `require_staff_token` / `require_headquarters_token` / `require_proposal_token` / `require_avtologistic_token` removed (unused); use `require_service` instead
+
+## Tests
+
+```bash
+uv pip install -e ".[test]" && uv run pytest
+```
+
 ## Что пакет не делает (осознанно)
 
 - Сессия каждого сервиса всё ещё изолирована — своя cookie, свой Redis/db-индекс.
