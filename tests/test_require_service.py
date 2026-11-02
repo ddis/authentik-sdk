@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from authentik_sso import AuthentikAuth
+from authentik_sso import AuthentikAuth, Service
 from conftest import make_config
 
 
@@ -20,11 +20,11 @@ def api(auth, fake_jwks):
     app = FastAPI()
 
     @app.get("/internal")
-    async def internal(svc: dict = Depends(auth.require_service("accounting", "staff"))):
+    async def internal(svc: dict = Depends(auth.require_service(Service.ACCOUNTING, Service.STAFF))):
         return svc
 
     @app.get("/internal-aud")
-    async def internal_aud(svc: dict = Depends(auth.require_service("accounting", audience="registry"))):
+    async def internal_aud(svc: dict = Depends(auth.require_service(Service.ACCOUNTING, audience="registry"))):
         return svc
 
     return TestClient(app)
@@ -122,3 +122,12 @@ def test_require_service_needs_a_name(auth):
     with pytest.raises(ValueError):
         auth.require_service()
 
+
+
+def test_unknown_service_name_fails_at_setup(auth):
+    """
+    Rule: require_service accepts only names of our services.
+    Here a misspelled name fails when the dependency is built, not on the first call.
+    """
+    with pytest.raises(ValueError):
+        auth.require_service("acounting")

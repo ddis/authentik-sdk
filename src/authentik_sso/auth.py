@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from .config import SSOConfig
 from . import services
-from .m2m import M2MVerifier
+from .m2m import M2MVerifier, Service
 from .store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -298,11 +298,11 @@ class AuthentikAuth:
         """
         return self._require_claim("roles", role)
 
-    def require_service(self, *names: str, audience: str | None = None):
+    def require_service(self, *names: Service, audience: str | None = None):
         """FastAPI dependency for service-to-service (m2m) endpoints.
 
-        Usage: `async def endpoint(svc: dict = Depends(auth.require_service("accounting")))`
-        -> `{"caller": "accounting", "on_behalf_of": "<user sub>" | None}`; see `m2m.M2MVerifier`.
+        Usage: `async def endpoint(svc: ServiceCaller = Depends(auth.require_service(Service.ACCOUNTING)))`
+        -> `{"caller": Service.ACCOUNTING, "on_behalf_of": "<user sub>" | None}`; see `m2m.M2MVerifier`.
         """
         return self.m2m.require_service(*names, audience=audience)
 

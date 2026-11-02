@@ -8,6 +8,7 @@ Every calling service has its own Authentik provider `<name>-m2m` (client_creden
 
 import asyncio
 import logging
+from enum import StrEnum
 from typing import TypedDict
 
 import jwt
@@ -23,8 +24,19 @@ ON_BEHALF_OF_HEADER = "X-On-Behalf-Of"
 EXPIRY_LEEWAY_M2M_SECONDS = 10
 
 
+class Service(StrEnum):
+    """Our services; the value is the Authentik provider slug without "-m2m"."""
+
+    ACCOUNTING = "accounting"
+    REGISTRY = "registry"
+    STAFF = "staff"
+    HEADQUARTERS = "headquarters"
+    PROPOSAL = "proposal"
+    AVTO_LOGISTIC = "avto-logistic"
+
+
 class ServiceCaller(TypedDict):
-    caller: str  # "accounting"
+    caller: Service
     on_behalf_of: str | None  # user's OIDC `sub` from X-On-Behalf-Of
 
 
@@ -105,7 +117,7 @@ class M2MVerifier:
             logger.warning("M2M token rejected for %s: %s", slug, exc)
             raise _unauthorized(f"Invalid token: {exc}")
 
-    def require_service(self, *names: str, audience: str | None = None):
+    def require_service(self, *names: Service, audience: str | None = None):
         """FastAPI dependency accepting only m2m tokens of the listed services.
 
             no / bad / user token -> 401
@@ -114,7 +126,8 @@ class M2MVerifier:
         """
         if not names:
             raise ValueError("require_service() needs at least one service name")
-        allowed = {self.issuer(f"{name}{M2M_SUFFIX}"): name for name in names}
+        # a plain string is accepted only if it names a Service; "acounting" fails at import
+        allowed = {self.issuer(f"{name}{M2M_SUFFIX}"): name for name in map(Service, names)}
         bearer_scheme = HTTPBearer(auto_error=False)
 
         async def dependency(

@@ -200,15 +200,16 @@ The service's own login app (`<svc>`) issues user tokens with `iss …/o/<svc>/`
 
 ```python
 @app.put("/internal/v1/pool/by-source/{caller}/{source_id}")
-async def put_item(svc: ServiceCaller = Depends(auth.require_service("accounting"))):
-    svc  # {"caller": "accounting", "on_behalf_of": "<user sub from X-On-Behalf-Of>" | None}
+async def put_item(svc: ServiceCaller = Depends(auth.require_service(Service.ACCOUNTING))):
+    svc  # {"caller": Service.ACCOUNTING, "on_behalf_of": "<user sub from X-On-Behalf-Of>" | None}
 ```
 
+- names are `authentik_sso.Service` members (accounting, registry, staff, headquarters, proposal, avto-logistic)
 - token `iss` must be `<AUTHENTIK_ISSUER base>/o/<name>-m2m/` for a listed name
 - no / invalid / expired / user login token → 401
 - valid m2m token of a service not listed → 403
 - JWKS unreachable → 503 (caller should retry)
-- audience not checked; `require_service("accounting", audience="registry")` turns it on
+- audience not checked; `require_service(Service.ACCOUNTING, audience="registry")` turns it on
 - JWKS client cached per process (per provider); raw tokens never logged
 
 ### Caller: `auth.service_client`
@@ -234,7 +235,7 @@ All settings live in `SSOConfig.from_env()`; the m2m ones are optional and check
 ### Upgrading to 0.6.0
 
 - `AUTHENTIK_JWKS_URL` is no longer read (can be removed from `.env`)
-- `require_staff_token` / `require_headquarters_token` / `require_proposal_token` / `require_avtologistic_token` removed (unused); use `require_service` instead
+- `require_staff_token` / `require_headquarters_token` / `require_proposal_token` / `require_avtologistic_token` removed (unused); use `require_service(Service.…)` instead
 
 ## Tests
 
