@@ -84,7 +84,7 @@ class M2MVerifier:
         # JWKS fetch is blocking urllib: keep it off the event loop
         return await asyncio.to_thread(self._jwks_client(slug).get_signing_key_from_jwt, token)
 
-    async def verify(self, slug: str, token: str, audience: str | None = None) -> dict:
+    async def verify(self, slug: str, token: str) -> dict:
         """Claims of a valid token from provider `slug`; 401 if invalid, 503 if JWKS is unreachable."""
         if (parts := len(token.split("."))) != 3:
             logger.warning("M2M token rejected for %s: %d segments", slug, parts)
@@ -106,18 +106,15 @@ class M2MVerifier:
                 signing_key.key,
                 algorithms=["RS256"],
                 issuer=self.issuer(slug),
-                audience=audience,
-                options={
-                    "verify_aud": audience is not None,
-                    "require": ["exp", "iss"],
-                },
+                # aud is the caller's own client_id in Authentik: it repeats iss, never names the callee
+                options={"verify_aud": False, "require": ["exp", "iss"]},
                 leeway=EXPIRY_LEEWAY_M2M_SECONDS,
             )
         except jwt.PyJWTError as exc:
             logger.warning("M2M token rejected for %s: %s", slug, exc)
             raise _unauthorized(f"Invalid token: {exc}")
 
-    def require_service(self, *names: Service, audience: str | None = None):
+    def require_service(self, *names: Service):
         """FastAPI dependency accepting only m2m tokens of the listed services.
 
             no / bad / user token -> 401
@@ -153,7 +150,7 @@ class M2MVerifier:
                 logger.warning("M2M token rejected: not an m2m issuer (iss=%s)", iss)
                 raise _unauthorized("Invalid token")
 
-            await self.verify(f"{caller}{M2M_SUFFIX}", token, audience=audience)
+            await self.verify(f"{caller}{M2M_SUFFIX}", token)
             return {
                 "caller": caller,
                 "on_behalf_of": request.headers.get(ON_BEHALF_OF_HEADER) or None,

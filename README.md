@@ -209,7 +209,7 @@ async def put_item(svc: ServiceCaller = Depends(auth.require_service(Service.ACC
 - no / invalid / expired / user login token → 401
 - valid m2m token of a service not listed → 403
 - JWKS unreachable → 503 (caller should retry)
-- audience not checked; `require_service(Service.ACCOUNTING, audience="registry")` turns it on
+- `aud` not checked: Authentik sets it to the caller's own client_id, so it never names the callee
 - JWKS client cached per process (per provider); raw tokens never logged
 
 ### Caller: `auth.service_client`

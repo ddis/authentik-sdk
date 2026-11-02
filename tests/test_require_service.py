@@ -23,10 +23,6 @@ def api(auth, fake_jwks):
     async def internal(svc: dict = Depends(auth.require_service(Service.ACCOUNTING, Service.STAFF))):
         return svc
 
-    @app.get("/internal-aud")
-    async def internal_aud(svc: dict = Depends(auth.require_service(Service.ACCOUNTING, audience="registry"))):
-        return svc
-
     return TestClient(app)
 
 
@@ -80,14 +76,8 @@ def test_expired_token_is_401(api, make_token):
     assert call(api, make_token("accounting-m2m", ttl=-60)).status_code == 401
 
 
-def test_audience_not_checked_by_default(api, make_token):
+def test_audience_not_checked(api, make_token):
     assert call(api, make_token("accounting-m2m", aud="someone-else")).status_code == 200
-
-
-def test_audience_checked_when_given(api, make_token):
-    assert call(api, make_token("accounting-m2m", aud="registry"), path="/internal-aud").status_code == 200
-    assert call(api, make_token("accounting-m2m", aud="staff"), path="/internal-aud").status_code == 401
-    assert call(api, make_token("accounting-m2m"), path="/internal-aud").status_code == 401
 
 
 def test_jwks_client_cached_per_process(api, make_token, fake_jwks):
