@@ -15,12 +15,12 @@ One general way for our services to call each other, in place of the old per-ser
 
 ### Removed
 - `require_staff_token` / `require_headquarters_token` / `require_proposal_token` / `require_avtologistic_token` (unused); use `require_service(Service.…)`
-- `SSOConfig.jwks_url` and `AUTHENTIK_JWKS_URL`: JWKS URL is built from the token's issuer
+- `SSOConfig.jwks_url`: the keys URL now comes from the token's issuer
 
 ### Changed
-- Python ≥ 3.11 (`StrEnum`)
+- Python ≥ 3.11
 
-### Upgrading
-- remove `AUTHENTIK_JWKS_URL` from `.env`; drop `jwks_url=` where `SSOConfig` is built by hand
-- set `ENVIRONMENT` (`local` / `dev` / `prod`) where it isn't `local`
-- callers: set `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET` from their `<svc>-m2m` provider
+### .env
+- removed: `AUTHENTIK_JWKS_URL`
+- added: `ENVIRONMENT` = `local` (default) / `dev` / `prod`; any other value fails at startup
+- added, only in services that call others: `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET`, from the service's `<svc>-m2m` provider in Authentik
