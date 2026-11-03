@@ -8,6 +8,7 @@ One general way for our services to call each other, in place of the old per-ser
 - Service-to-service (m2m) auth: a service calls another with its own Authentik token, optionally on behalf of a user
   - callee: `require_service(Service.ACCOUNTING)` lets in only the listed services
   - caller: `auth.service_client("registry")`, an HTTP client that gets and renews the token itself
+  - tokens and Authentik's signing keys are cached: no Authentik round-trip per request (0.5.0 fetched the keys on every check)
   - setup per service: README «M2M»
 - `Service`: the list of our services, so a misspelled name fails at startup
 - `ENVIRONMENT` (`local` / `dev` / `prod`): which environment the service runs in, used to find other services
