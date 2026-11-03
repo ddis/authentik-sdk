@@ -9,6 +9,8 @@ exchange и сессия у каждого сервиса свои.
 
 ## Установка
 
+Python ≥ 3.11. Изменения по версиям и шаги обновления — в [CHANGELOG.md](CHANGELOG.md).
+
 Пока без публикации в PyPI — ставится по локальному пути:
 
 ```bash
@@ -231,11 +233,6 @@ All settings live in `SSOConfig.from_env()`; the m2m ones are optional and check
 | `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET` | caller | from `<svc>-m2m` provider |
 | `ENVIRONMENT` | all | `local` (default) / `dev` / `prod`; anything else fails `SSOConfig.from_env()` at startup |
 | `AUTHENTIK_ISSUER` | both | same Authentik host in every service of one environment (`iss` is built from the request host) |
-
-### Upgrading to 0.6.0
-
-- `AUTHENTIK_JWKS_URL` is no longer read (can be removed from `.env`)
-- `require_staff_token` / `require_headquarters_token` / `require_proposal_token` / `require_avtologistic_token` removed (unused); use `require_service(Service.…)` instead
 
 ## Tests
 
